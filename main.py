@@ -13,7 +13,7 @@ from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QComboBox
 from sklearn.metrics.cluster import normalized_mutual_info_score
-from PyQt5.QtWidgets import QApplication, QPushButton, QLabel, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QPushButton, QLabel, QVBoxLayout, QWidget,QLineEdit
 from PyQt5.QtWidgets import QApplication, QMainWindow, QGraphicsScene, QGraphicsView, QGraphicsEllipseItem, QGraphicsLineItem
 import matplotlib.colors as mcolors
 
@@ -32,7 +32,7 @@ class GraphWidget(FigureCanvas):
             G.nodes[node]['color'] = 'red'
         degrees = dict(nx.degree(G))
         node_sizes = [300 * degrees[node] for node in G.nodes()]
-        nx.draw(G, pos, ax=self.axes)
+        nx.draw(G, pos, ax=self.axes,with_labels=True)
         labels = nx.get_node_attributes(G, 'id')
         node_colors = [G.nodes[node].get('color', 'blue') for node in G.nodes()]
         nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=node_sizes, ax=self.axes)
@@ -55,12 +55,7 @@ class MainWindow(QMainWindow):
         self.graph_widget = GraphWidget(self)
         self.setCentralWidget(self.graph_widget)
         self.graph_widget.draw_graph(G)
-        
-        # for nmi 
-        # self.nmi_button = QPushButton('Calculate NMI')
-        # self.nmi_label = QLabel('NMI score:')
-        # self.nmi_button.clicked.connect(self.calculate_nmi)
-        
+
         # Create a button to apply the Girvan-Newman algorithm
         self.gn_button = QPushButton('Apply Girvan-Newman')
         self.gn_button.clicked.connect(self.apply_girvan_newman)
@@ -69,21 +64,39 @@ class MainWindow(QMainWindow):
         self.stop_button = QPushButton('Stop')
         self.stop_button.clicked.connect(self.stop_girvan_newman)
 
+        #conductance part
+        conductunce_box=QHBoxLayout()
+        self.result_label = QLabel(self)
+        self.start_index_edit = QLineEdit()
+        self.end_index_edit = QLineEdit()
+        self.calculate_button = QPushButton("Calculate Conductance", self)
+        self.calculate_button.clicked.connect(self.calculate_conductance)
+        conductunce_box.addWidget(self.result_label)
+        conductunce_box.addWidget(self.calculate_button)
+        conductunce_box.addWidget(self.start_index_edit)
+        conductunce_box.addWidget(self.end_index_edit)
+        
+
         # Add the buttons to a horizontal layout
-        button_layout = QHBoxLayout()
-        button_layout.addWidget(self.gn_button)
-        # button_layout.addWidget(self.stop_button)
+        girvan_rank=QVBoxLayout()
+        self.rankpage_button=QPushButton('Rank page')
+        self.rankpage_button.clicked.connect(self.calculate_pagerank)
+        girvan_rank.addWidget(self.gn_button)
+        girvan_rank.addWidget(self.rankpage_button)
+
+        centeralities=QVBoxLayout()
         self.centrality_combo = QComboBox()
         self.centrality_combo.addItems(['Closeness Centrality', 'Betweenness Centrality', 'Harmonic Centrality'])
 
-        self.calculate_button = QPushButton('Calculate')
-        self.calculate_button.clicked.connect(self.calculate_centrality)
-        button_layout.addWidget(self.centrality_combo)
-        button_layout.addWidget(self.calculate_button)
+        self.centerality_calculate_button = QPushButton('Calculate')
+        self.centerality_calculate_button.clicked.connect(self.calculate_centrality)  
+        centeralities.addWidget(self.centrality_combo)
+        centeralities.addWidget(self.centerality_calculate_button)
+        button_layout = QHBoxLayout()
+        button_layout.addLayout(girvan_rank)
+        button_layout.addLayout(centeralities)
 
-        self.rankpage_button=QPushButton('Rank page')
-        self.rankpage_button.clicked.connect(self.calculate_pagerank)
-        button_layout.addWidget(self.rankpage_button)
+
 
         self.table = QTableWidget()
 
@@ -102,21 +115,15 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         
-
-        # # Create a main widget and set the layout
-        # main_widget = QWidget(self)
-        # main_widget.setLayout(layout)
-        # self.setCentralWidget(main_widget)
-        # Add the horizontal layout to a vertical layout
+    
         layout = QVBoxLayout()
         layout.addLayout(button_layout)
+        layout.addLayout(conductunce_box)
         layout.addWidget(self.table_centrality)
         layout.addWidget(self.table_pagerank)
-        # layout.addLayout(button_layout)
         layout.addWidget(self.graph_widget)
-        # layout.addLayout(button_layout)
-        # layout.addWidget(self.graph_widget)
-        # layout.addWidget(self.table)
+
+
 
         # Create a main widget and set the layout
         main_widget = QWidget(self)
@@ -126,6 +133,20 @@ class MainWindow(QMainWindow):
         self.G = G.copy()
         self.removed_edges = []
     
+    def calculate_conductance(self):
+        start_index = int(self.start_index_edit.text())
+        end_index = int(self.end_index_edit.text())
+        S = list(self.G.nodes())[start_index:end_index+1]
+        #(S)
+        volume_S = sum(self.G.degree(node) for node in S)
+        volume_T = sum(self.G.degree(node) for node in self.G.nodes() if node not in S)
+        num_cut_edges = sum(self.G.degree(node, weight='weight') for node in S)
+        if volume_T == 0 :
+            conductance = 1.0
+        else:
+            conductance = nx.cuts.conductance(self.G, S)
+        self.result_label.setText(f"The conductance of the set {S} is {conductance:.4f}")
+        # Calculate the conductance of the set
     def calculate_pagerank(self):
         # Calculate PageRank scores
         pagerank_scores = nx.pagerank(self.G)
@@ -175,7 +196,7 @@ class MainWindow(QMainWindow):
         # self.table.resizeColumnsToContents()
 
     def apply_girvan_newman(self):
-        print(self.G.nodes())
+        #(self.G.nodes())
         if len(self.removed_edges) == len(self.G.edges()):
             # All edges have been removed, stop the algorithm
             return
