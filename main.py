@@ -1,8 +1,13 @@
 import sys
 import networkx as nx
 import pandas as pd
-from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
+import numpy as np
+import os
+from PyQt5 import QtWidgets, QtGui, QtCore
+from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,QDesktopWidget,QCheckBox
 from PyQt5.QtGui import QPalette, QColor
+from sklearn.metrics import f1_score
+from sklearn.metrics import precision_recall_fscore_support,normalized_mutual_info_score
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PyQt5.QtCore import Qt
@@ -12,9 +17,7 @@ import matplotlib.pyplot as plt
 from PyQt5.QtCore import QTimer 
 from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QComboBox
-from sklearn.metrics.cluster import normalized_mutual_info_score
 from PyQt5.QtWidgets import QApplication, QPushButton, QLabel, QVBoxLayout, QWidget,QLineEdit
-from PyQt5.QtWidgets import QApplication, QMainWindow, QGraphicsScene, QGraphicsView, QGraphicsEllipseItem, QGraphicsLineItem
 import matplotlib.colors as mcolors
 
 
@@ -24,12 +27,19 @@ class GraphWidget(FigureCanvas):
         self.axes = self.fig.add_subplot(111)
         super().__init__(self.fig)
         self.setParent(parent)
+        self.is_directed=False
 
-    def draw_graph(self, G):
+    def draw_graph(self, G , partition=None):
         self.axes.clear()
         pos = nx.spring_layout(G)
+        # print('here',partition)
         for node in G.nodes():
             G.nodes[node]['color'] = 'red'
+        if partition is not None:
+            for node in G.nodes():
+                print(partition[node])
+                G.nodes[node]['color'] = partition[node]
+        
         degrees = dict(nx.degree(G))
         node_sizes = [300 * degrees[node] for node in G.nodes()]
         nx.draw(G, pos, ax=self.axes,with_labels=True)
@@ -40,42 +50,51 @@ class GraphWidget(FigureCanvas):
 
         edges = G.edges()
         weights = [G[u][v].get('weight', 1) for u, v in edges]
-        edge_widths = [3 * w for w in weights] # Set edge width proportional to weight
-        colors = [G[u][v].get('color', 'black') for u, v in edges]
-        nx.draw_networkx_edges(G, pos, edgelist=edges, edge_color='black', width=edge_widths, edge_vmax=max(weights)) 
-        
+        if len(weights) == 0:
+            edge_vmax = 1.0
+        else:
+            edge_vmax = max(weights)
+        edge_widths = [ 0.75*w for w in weights] # Set edge width proportional to weight
+        # print(edge_widths)
+        if self.is_directed:
+            print(self.is_directed)
+            nx.draw_networkx_edges(G, pos, edgelist=edges, edge_color='black', width=edge_widths, edge_vmax=edge_vmax,ax=self.axes, arrows=True,arrowstyle='->', arrowsize=10) 
+        else:
+            print(self.is_directed)
+            nx.draw_networkx_edges(G, pos, edgelist=edges, edge_color='black', width=edge_widths,  edge_vmax=edge_vmax,ax=self.axes) 
+
         self.fig.tight_layout()
         self.draw()
+    def set_directed(self, directed):
+        self.is_directed = directed
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, G):
+    def __init__(self):
         super().__init__()
+        self.is_directed = False
+        self.G = nx.Graph()
         self.setWindowTitle('NetworkX Graph')
         self.graph_widget = GraphWidget(self)
         self.setCentralWidget(self.graph_widget)
-        self.graph_widget.draw_graph(G)
-
+        self.graph_widget.draw_graph(self.G)
+        
         # Create a button to apply the Girvan-Newman algorithm
         self.gn_button = QPushButton('Apply Girvan-Newman')
         self.gn_button.clicked.connect(self.apply_girvan_newman)
 
-        # Create a button to stop the Girvan-Newman algorithm
-        self.stop_button = QPushButton('Stop')
-        self.stop_button.clicked.connect(self.stop_girvan_newman)
-
-        #conductance part
-        conductunce_box=QHBoxLayout()
+        #quality (evaluation) part
+        quality_box=QHBoxLayout()
         self.result_label = QLabel(self)
-        self.start_index_edit = QLineEdit()
-        self.end_index_edit = QLineEdit()
-        self.calculate_button = QPushButton("Calculate Conductance", self)
-        self.calculate_button.clicked.connect(self.calculate_conductance)
-        conductunce_box.addWidget(self.result_label)
-        conductunce_box.addWidget(self.calculate_button)
-        conductunce_box.addWidget(self.start_index_edit)
-        conductunce_box.addWidget(self.end_index_edit)
-        
+        self.calculate_button = QPushButton("Calculate quality", self)
+        self.algorithm_selector = QComboBox()
+        self.algorithm_selector.addItem("NMI")
+        self.algorithm_selector.addItem("coverage")
+        self.algorithm_selector.addItem("Conductance")
+        self.calculate_button.clicked.connect(self.calculate_quality)
+        quality_box.addWidget(self.algorithm_selector)
+        quality_box.addWidget(self.calculate_button)
+        quality_box.addWidget(self.result_label)
 
         # Add the buttons to a horizontal layout
         girvan_rank=QVBoxLayout()
@@ -87,15 +106,36 @@ class MainWindow(QMainWindow):
         centeralities=QVBoxLayout()
         self.centrality_combo = QComboBox()
         self.centrality_combo.addItems(['Closeness Centrality', 'Betweenness Centrality', 'Harmonic Centrality'])
-
         self.centerality_calculate_button = QPushButton('Calculate')
         self.centerality_calculate_button.clicked.connect(self.calculate_centrality)  
         centeralities.addWidget(self.centrality_combo)
         centeralities.addWidget(self.centerality_calculate_button)
-        button_layout = QHBoxLayout()
-        button_layout.addLayout(girvan_rank)
-        button_layout.addLayout(centeralities)
-
+        # button_layout = QHBoxLayout()
+        # button_layout.addLayout(girvan_rank)
+        # button_layout.addLayout(centeralities)
+        label = QtWidgets.QLabel('select nodes spreadsheet:')
+        # Create a button for uploading the file
+        self.nodes_btn = QtWidgets.QPushButton('Upload nodes')
+        self.nodes_btn.clicked.connect(self.upload_nodes_file)
+        self.edges_btn = QtWidgets.QPushButton('Upload edges')
+        self.edges_btn.clicked.connect(self.upload_edges_file)
+        self.directed_checkbox = QCheckBox('Convert graph to directed')
+        self.start_btn=QPushButton('start')
+        self.start_btn.clicked.connect(self.create_graph)
+        # self.directed_checkbox.stateChanged.connect(self.create_graph)
+        # self.start.clicked.connect(self.show_graph)
+        right_bar=QVBoxLayout()
+        right_bar.addWidget(self.start_btn)
+        right_bar.addWidget(self.directed_checkbox)
+        right_bar.addWidget(label)
+        right_bar.addWidget(self.nodes_btn)
+        right_bar.addWidget(self.edges_btn)
+        right_bar.addLayout(girvan_rank)
+        right_bar.addLayout(quality_box)
+        right_bar.addLayout(centeralities)
+        right_bar.setSpacing(0)
+        tables=QHBoxLayout()
+        self.table_girvan=QTableWidget()
 
 
         self.table = QTableWidget()
@@ -114,38 +154,173 @@ class MainWindow(QMainWindow):
         header = self.table_centrality.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        
-    
-        layout = QVBoxLayout()
-        layout.addLayout(button_layout)
-        layout.addLayout(conductunce_box)
-        layout.addWidget(self.table_centrality)
-        layout.addWidget(self.table_pagerank)
-        layout.addWidget(self.graph_widget)
 
+
+
+        tables.addWidget(self.table_girvan)
+        tables.addWidget(self.table_centrality)
+        tables.addWidget(self.table_pagerank)
+        # side_bar=QHBoxLayout()
+        # side_bar.addLayout(button_layout)
+        # side_bar.addLayout(quality_box)
+        tables.setContentsMargins(0, 0, 0, 0)
+        tables.setSpacing(0)
+        screen = QDesktopWidget().screenGeometry()
+        height = int(screen.height() * 0.2)
+        self.table_centrality.setFixedHeight(height)
+        self.table_pagerank.setFixedHeight(height)
+        self.table_girvan.setFixedHeight(height)
+        tables.setGeometry(self.table_pagerank.rect())
+
+        hlayout=QHBoxLayout()
+
+        layout = QVBoxLayout()
+        # layout.addLayout(button_layout)
+        # layout.addLayout(quality_box)
+        
+        # layout.addWidget(self.table_pagerank)
+        layout.addWidget(self.graph_widget)
+        layout.addLayout(tables)
+        hlayout.addLayout(layout)
+        hlayout.addLayout(right_bar)
 
 
         # Create a main widget and set the layout
         main_widget = QWidget(self)
-        main_widget.setLayout(layout)
+        main_widget.setLayout(hlayout)
         self.setCentralWidget(main_widget)
 
-        self.G = G.copy()
+        self.G = self.G.copy()
         self.removed_edges = []
     
-    def calculate_conductance(self):
-        start_index = int(self.start_index_edit.text())
-        end_index = int(self.end_index_edit.text())
-        S = list(self.G.nodes())[start_index:end_index+1]
-        #(S)
-        volume_S = sum(self.G.degree(node) for node in S)
-        volume_T = sum(self.G.degree(node) for node in self.G.nodes() if node not in S)
-        num_cut_edges = sum(self.G.degree(node, weight='weight') for node in S)
-        if volume_T == 0 :
-            conductance = 1.0
+        # return community_structure
+
+    # def show_graph(self, G):
+    def create_graph(self):
+        if self.directed_checkbox.isChecked():
+            self.G = nx.DiGraph()
+            self.graph_widget.set_directed(True)
+            self.G = self.G.to_directed()
         else:
-            conductance = nx.cuts.conductance(self.G, S)
-        self.result_label.setText(f"The conductance of the set {S} is {conductance:.4f}")
+           self. G = nx.Graph()
+           self.graph_widget.set_directed(False)
+           self.G = self.G.to_undirected()
+        # self.nodes = pd.read_csv('InputFileNodes.csv')
+        # self.edges = pd.read_csv('InputFileEdges.csv')
+        # self.G = nx.Graph()
+        self.nodes_array = self.nodes.to_dict(orient='records')
+        self.edges_array = self.edges.to_dict(orient='records')
+        for node_attrs in self.nodes_array:
+            self.G.add_node(node_attrs['id'], **node_attrs)
+
+        for edge_attrs in self.edges_array:
+            self.G.add_edge(edge_attrs['source'], edge_attrs['target'], **edge_attrs)
+        self.graph_widget.draw_graph(self.G)
+
+    def set_directed(self, directed):
+        self.is_directed = directed   
+    def convert_graph(self, state):
+        # Check the state of the checkbox
+        if state == 2:
+            # Convert the graph to directed
+            self.graph_widget.set_directed(True)
+            self.G = self.G.to_directed()
+        else:
+            # Convert the graph to undirected
+            self.graph_widget.set_directed(False)
+            self.G = self.G.to_undirected()
+
+        # Redraw the graph
+        self.graph_widget.draw_graph(self.G)
+    
+    def upload_nodes_file(self):
+        filename, _ = QtWidgets.QFileDialog.getOpenFileName(self, 'Open Spreadsheet', os.path.expanduser('~'), 'Spreadsheet Files (*.csv *.xlsx *.xls)')
+        self.nodes = pd.read_csv(filename)
+        self.nodes_array = self.nodes.to_dict(orient='records')
+        print(self.nodes_array)
+
+        # self.uploaded.emit(nodes)
+
+    def upload_edges_file(self):
+        filename, _ = QtWidgets.QFileDialog.getOpenFileName(self, 'Open Spreadsheet', os.path.expanduser('~'), 'Spreadsheet Files (*.csv *.xlsx *.xls)')
+        self.edges = pd.read_csv(filename)
+        self.edges_array = self.edges.to_dict(orient='records')
+        print(self.edges_array)
+        # self.uploaded.emit(edges)
+
+
+    def calculate_coverage(self,G, communities):
+        # Calculate the total number of nodes in the graph
+        num_nodes = len(G.nodes())
+
+        # Calculate the sum of the sizes of the communities
+        community_sizes = [len(community) for community in communities]
+        print(community_sizes)
+        total_community_size = sum(community_sizes)
+        print(total_community_size)
+        # Calculate the coverage of the partition
+        coverage = total_community_size / num_nodes
+
+        return coverage
+    def calculate_quality(self):
+        algorithm = self.algorithm_selector.currentText()
+        if algorithm=="Conductance":
+            communities_generator = nx.algorithms.community.girvan_newman(self.G)
+            communities = list(next(communities_generator))
+            result=""
+            for i, community in enumerate(communities):
+                conductance = nx.algorithms.cuts.conductance(self.G, community)
+                result+=f"Community {i}: Conductance = {conductance} \n"
+                print(f"Community {i}: Conductance = {conductance}")
+            self.result_label.setText(f"{result}")
+            return
+        elif algorithm=="coverage":
+            detected_communities_generator = nx.algorithms.community.girvan_newman(self.G)
+            detected_communities = list(next(detected_communities_generator))
+            # Calculate the coverage of the partition
+            print(detected_communities)
+            coverage = self.calculate_coverage(self.G, detected_communities)
+            print(f"Coverage: {coverage}")
+            self.result_label.setText(f"coverage = {coverage}")
+            return
+        elif algorithm=="NMI":
+            print(self.nodes)
+            ground_truth = self.nodes['class'].values
+            detected_communities_generator = nx.algorithms.community.girvan_newman(self.G)
+            detected_communities = list(next(detected_communities_generator))
+            n_communities = len(detected_communities)
+            n = self.nodes.shape[0]
+            nmi_scores = []
+            result=""
+            if n_communities > 0:
+                for i in range(n_communities):
+                    if i < n_communities:
+                        contingency_table = pd.crosstab(ground_truth, [node in detected_communities[i] for node in self.G.nodes()])
+                        ground_truth_marginal = contingency_table.sum(axis=1)
+                        detected_marginal = contingency_table.sum(axis=0)
+                        pointwise_mi = np.zeros_like(contingency_table, dtype=np.float64)
+                        for j in range(contingency_table.shape[0]):
+                            for k in range(contingency_table.shape[1]):
+                                pij = contingency_table.iloc[j, k] / n
+                                pi = ground_truth_marginal.iloc[j] / n
+                                pj = detected_marginal.iloc[k] / n
+                                if (pi != 0 and pj != 0):
+                                    pointwise_mi[j, k] = np.log2(pij / (pi*pj))
+                                else:
+                                    pointwise_mi[j, k] = np.log2(0)
+                        mi = np.sum(np.nan_to_num(contingency_table / n * pointwise_mi))
+                        nmi = normalized_mutual_info_score(ground_truth, [node in detected_communities[i] for node in self.G.nodes()])
+
+                nmi_scores.append(nmi)
+                print(f"Community {i}: NMI = {nmi}")
+                result+=f"NMI = {nmi} \n"
+            self.result_label.setText(result)
+
+            return 
+
+
+
+
         # Calculate the conductance of the set
     def calculate_pagerank(self):
         # Calculate PageRank scores
@@ -163,8 +338,6 @@ class MainWindow(QMainWindow):
                 for col in range(2):
                     self.table_pagerank.item(row, col).setBackground(QColor(255, 255, 100))
     
-
-
     def calculate_centrality(self):
         # Get the selected centrality measure from the combo box
         centrality_type = str(self.centrality_combo.currentText())
@@ -175,6 +348,9 @@ class MainWindow(QMainWindow):
             centrality = nx.betweenness_centrality(self.G)
         elif centrality_type == 'Harmonic Centrality':
             centrality = nx.harmonic_centrality(self.G)
+            n = len(self.G.nodes)
+            for node in centrality:
+                centrality[node] /= (n-1)
 
         # Sort the centrality values in descending order
         centrality = {k: v for k, v in sorted(centrality.items(), key=lambda item: -item[1])}
@@ -200,12 +376,8 @@ class MainWindow(QMainWindow):
         if len(self.removed_edges) == len(self.G.edges()):
             # All edges have been removed, stop the algorithm
             return
-
         # Compute the betweenness centrality of the edges
         edge_centrality = nx.edge_betweenness_centrality(self.G)
-        #("Betweenness centrality values:", edge_centrality)
-
-        # Remove the edge with the highest betweenness centrality
         max_centrality = max(edge_centrality.values())
         for edge, centrality in edge_centrality.items():
             if centrality == max_centrality:
@@ -214,9 +386,23 @@ class MainWindow(QMainWindow):
                 break
 
         # Draw the updated graph
-        self.graph_widget.draw_graph(self.G)
-
+        
+        communities_generator = nx.community.girvan_newman(self.G)
+        community_color=['red','orange','yellow','blue','green','gold','black','brown','cyan','gray']
+        new_colors={}
+        partition = tuple(sorted(c) for c in next(communities_generator))
+        num_communities = len(partition)
+        self.table_girvan.setRowCount(num_communities)
+        self.table_girvan.setColumnCount(2)
+        for i, community in enumerate(partition):
+            nodes = ', '.join(str(node) for node in community)
+            for node in community:
+                new_colors[node]=community_color[i%len(community_color)]
+            print(new_colors)
+            self.table_girvan.setItem(i, 0, QTableWidgetItem(f"Community {i+1}"))
+            self.table_girvan.setItem(i, 1, QTableWidgetItem(nodes))
         # Display a message with the removed edges
+        self.graph_widget.draw_graph(self.G,partition=new_colors)
         if len(self.removed_edges) > 0:
             last_edge = self.removed_edges[-1]
             message = f"Next edge to remove: {edge}"
@@ -234,35 +420,25 @@ class MainWindow(QMainWindow):
     def display_message(self, message):
         # Show a message box with the specified message
         msg_box = QMessageBox()
-        # msg_box.setWindowTitle("Message")
-        # msg_box.setText(message)
-        # msg_box.setIcon(QMessageBox.Information)
-        # msg_box.setStandardButtons(QMessageBox.Ok)
-        # msg_box.setDefaultButton(QMessageBox.Ok)
-        # msg_box.exec_()
 
-        # # Create a timer to hide the message box after 3 seconds
-        # timer = QTimer(self)
-        # timer.timeout.connect(lambda: msg_box.hide())
-        # timer.start(3000)
 
 if __name__ == '__main__':
     # Load node and edge data from CSV files
-    nodes = pd.read_csv('InputFileNodes.csv')
-    edges = pd.read_csv('InputFileEdges.csv')
+    # nodes = pd.read_csv('InputFileNodes.csv')
+    # edges = pd.read_csv('InputFileEdges.csv')
 
-    G = nx.Graph()
-    nodes_array = nodes.to_dict(orient='records')
-    edges_array = edges.to_dict(orient='records')
+    # G = nx.DiGraph()
+    # nodes_array = nodes.to_dict(orient='records')
+    # edges_array = edges.to_dict(orient='records')
 
-    for node_attrs in nodes_array:
-        G.add_node(node_attrs['id'], **node_attrs)
+    # for node_attrs in nodes_array:
+    #     G.add_node(node_attrs['id'], **node_attrs)
 
-    for edge_attrs in edges_array:
-        G.add_edge(edge_attrs['source'], edge_attrs['target'], **edge_attrs)
+    # for edge_attrs in edges_array:
+    #     G.add_edge(edge_attrs['source'], edge_attrs['target'], **edge_attrs)
 
     app = QApplication(sys.argv)
-    main_window = MainWindow(G)
+    main_window = MainWindow()
     main_window.show()
     sys.exit(app.exec_())
 
