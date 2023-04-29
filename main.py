@@ -3,6 +3,7 @@ import networkx as nx
 import pandas as pd
 import numpy as np
 import os
+from networkx.algorithms.community.quality import modularity
 from PyQt5 import QtWidgets, QtGui, QtCore
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,QDesktopWidget,QCheckBox
 from PyQt5.QtGui import QPalette, QColor
@@ -18,7 +19,8 @@ from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QComboBox
 from PyQt5.QtWidgets import QApplication, QPushButton, QLabel, QVBoxLayout, QWidget,QLineEdit
-import matplotlib.colors as mcolors
+from sklearn.metrics.cluster import contingency_matrix, entropy
+from sklearn.metrics import mutual_info_score, normalized_mutual_info_score
 
 
 class GraphWidget(FigureCanvas):
@@ -28,6 +30,7 @@ class GraphWidget(FigureCanvas):
         super().__init__(self.fig)
         self.setParent(parent)
         self.is_directed=False
+        self.is_weight=False
 
     def draw_graph(self, G , partition=None):
         self.axes.clear()
@@ -50,12 +53,17 @@ class GraphWidget(FigureCanvas):
 
         edges = G.edges()
         weights = [G[u][v].get('weight', 1) for u, v in edges]
+
         if len(weights) == 0:
             edge_vmax = 1.0
         else:
             edge_vmax = max(weights)
-        edge_widths = [ 0.75*w for w in weights] # Set edge width proportional to weight
+         # Set edge width proportional to weight
         # print(edge_widths)
+        edge_widths = [ 1 for w in weights]
+        if self.is_weight:
+            edge_widths = [ 0.75*w for w in weights]
+
         if self.is_directed:
             print(self.is_directed)
             nx.draw_networkx_edges(G, pos, edgelist=edges, edge_color='black', width=edge_widths, edge_vmax=edge_vmax,ax=self.axes, arrows=True,arrowstyle='->', arrowsize=10) 
@@ -67,6 +75,8 @@ class GraphWidget(FigureCanvas):
         self.draw()
     def set_directed(self, directed):
         self.is_directed = directed
+    def set_weight(self,weight):
+        self.is_weight=weight
 
 
 class MainWindow(QMainWindow):
@@ -89,6 +99,7 @@ class MainWindow(QMainWindow):
         self.calculate_button = QPushButton("Calculate quality", self)
         self.algorithm_selector = QComboBox()
         self.algorithm_selector.addItem("NMI")
+        self.algorithm_selector.addItem("Modularity")
         self.algorithm_selector.addItem("coverage")
         self.algorithm_selector.addItem("Conductance")
         self.calculate_button.clicked.connect(self.calculate_quality)
@@ -107,12 +118,15 @@ class MainWindow(QMainWindow):
         self.centrality_combo = QComboBox()
         self.centrality_combo.addItems(['Closeness Centrality', 'Betweenness Centrality', 'Harmonic Centrality'])
         self.centerality_calculate_button = QPushButton('Calculate')
-        self.centerality_calculate_button.clicked.connect(self.calculate_centrality)  
+        self.centerality_calculate_button.clicked.connect(self.calculate_centrality) 
+        self.textbox = QLineEdit()
+        # self.filter=QPushButton('filter') 
+        # self.filter.clicked.connect(self.filteration)
+        centeralities.addWidget(self.textbox)
+        # centeralities.addWidget(self.filter)
         centeralities.addWidget(self.centrality_combo)
         centeralities.addWidget(self.centerality_calculate_button)
-        # button_layout = QHBoxLayout()
-        # button_layout.addLayout(girvan_rank)
-        # button_layout.addLayout(centeralities)
+
         label = QtWidgets.QLabel('select nodes spreadsheet:')
         # Create a button for uploading the file
         self.nodes_btn = QtWidgets.QPushButton('Upload nodes')
@@ -120,13 +134,16 @@ class MainWindow(QMainWindow):
         self.edges_btn = QtWidgets.QPushButton('Upload edges')
         self.edges_btn.clicked.connect(self.upload_edges_file)
         self.directed_checkbox = QCheckBox('Convert graph to directed')
+        self.weight_checkbox = QCheckBox('Convert graph to wieghted')
         self.start_btn=QPushButton('start')
         self.start_btn.clicked.connect(self.create_graph)
-        # self.directed_checkbox.stateChanged.connect(self.create_graph)
+        self.directed_checkbox.stateChanged.connect(self.create_graph)
+        self.weight_checkbox.stateChanged.connect(self.create_graph)
         # self.start.clicked.connect(self.show_graph)
         right_bar=QVBoxLayout()
         right_bar.addWidget(self.start_btn)
         right_bar.addWidget(self.directed_checkbox)
+        right_bar.addWidget(self.weight_checkbox)
         right_bar.addWidget(label)
         right_bar.addWidget(self.nodes_btn)
         right_bar.addWidget(self.edges_btn)
@@ -155,9 +172,19 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
 
+        self.table_modularity=QTableWidget()
+        self.table_modularity.setColumnCount(2)
+        self.table_modularity.setHorizontalHeaderLabels(['Node', 'Modularity'])
+        header = self.table_modularity.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        # row = self.table_modularity.rowCount()
+        # self.table_modularity.insertRow(row)
+        # self.table_modularity.setItem(row, 0, QTableWidgetItem(str(modularity_score)))
 
 
         tables.addWidget(self.table_girvan)
+        tables.addWidget(self.table_modularity)
         tables.addWidget(self.table_centrality)
         tables.addWidget(self.table_pagerank)
         # side_bar=QHBoxLayout()
@@ -170,6 +197,7 @@ class MainWindow(QMainWindow):
         self.table_centrality.setFixedHeight(height)
         self.table_pagerank.setFixedHeight(height)
         self.table_girvan.setFixedHeight(height)
+        self.table_modularity.setFixedHeight(height)
         tables.setGeometry(self.table_pagerank.rect())
 
         hlayout=QHBoxLayout()
@@ -196,6 +224,30 @@ class MainWindow(QMainWindow):
         # return community_structure
 
     # def show_graph(self, G):
+    def set_graphweight(self):
+        if self.weight_checkbox.isChecked():
+            self.graph_widget.set_weight(True)
+        else:
+            self.graph_widget.set_weight(False)
+
+        if self.directed_checkbox.isChecked():
+            self.G = nx.DiGraph()
+            self.graph_widget.set_directed(True)
+            self.G = self.G.to_directed()
+        else:
+           self. G = nx.Graph()
+           self.graph_widget.set_directed(False)
+           self.G = self.G.to_undirected()
+
+        self.nodes_array = self.nodes.to_dict(orient='records')
+        self.edges_array = self.edges.to_dict(orient='records')
+        for node_attrs in self.nodes_array:
+            self.G.add_node(node_attrs['id'], **node_attrs)
+
+        for edge_attrs in self.edges_array:
+            self.G.add_edge(edge_attrs['source'], edge_attrs['target'], **edge_attrs)
+        self.graph_widget.draw_graph(self.G)
+
     def create_graph(self):
         if self.directed_checkbox.isChecked():
             self.G = nx.DiGraph()
@@ -205,6 +257,10 @@ class MainWindow(QMainWindow):
            self. G = nx.Graph()
            self.graph_widget.set_directed(False)
            self.G = self.G.to_undirected()
+        if self.weight_checkbox.isChecked():
+            self.graph_widget.set_weight(True)
+        else:
+            self.graph_widget.set_weight(False)
         # self.nodes = pd.read_csv('InputFileNodes.csv')
         # self.edges = pd.read_csv('InputFileEdges.csv')
         # self.G = nx.Graph()
@@ -251,13 +307,13 @@ class MainWindow(QMainWindow):
 
     def calculate_coverage(self,G, communities):
         # Calculate the total number of nodes in the graph
-        num_nodes = len(G.nodes())
-
+        num_nodes = len(self.G.nodes())
         # Calculate the sum of the sizes of the communities
-        community_sizes = [len(community) for community in communities]
-        print(community_sizes)
-        total_community_size = sum(community_sizes)
-        print(total_community_size)
+        # community_sizes = [len(community) for community in communities]
+
+        # total_community_size = sum(community_sizes)
+        total_community_size=len(communities)
+        print(num_nodes, total_community_size)
         # Calculate the coverage of the partition
         coverage = total_community_size / num_nodes
 
@@ -279,47 +335,91 @@ class MainWindow(QMainWindow):
             detected_communities = list(next(detected_communities_generator))
             # Calculate the coverage of the partition
             print(detected_communities)
-            coverage = self.calculate_coverage(self.G, detected_communities)
-            print(f"Coverage: {coverage}")
-            self.result_label.setText(f"coverage = {coverage}")
+            result=""
+            for i, community in enumerate(detected_communities):
+                coverage = self.calculate_coverage(self.G, community)
+                print(f"Coverage: {coverage}")
+                result+=f"Community {i}: Coverage = {coverage} \n"
+                # print(f"Community {i}: Conductance = {conductance}")
+            self.result_label.setText(f"{result}")
+            # self.result_label.setText(f"coverage = {coverage}")
             return
+        elif algorithm=="Modularity":
+            # Detect communities using the Girvan-Newman algorithm
+            communities = next(nx.algorithms.community.girvan_newman(self.G))
+            node_to_community = {}
+            for i, community in enumerate(communities):
+                for node in community:
+                    node_to_community[node] = i
+            mod_no= 0
+            node_modularity = {}
+            for node in self.G.nodes():
+                community = node_to_community.get(node, None)
+                if community is not None:
+                    subgraph = self.G.subgraph(communities[community])
+                    node_modularity[node] = community
+                    mod_no=modularity(self.G, communities, subgraph)
+                else:
+                    node_modularity[node] = 0.0
+
+            # print(node_modularity)
+            # Clear the table and add the modularity values
+            self.table_modularity.setRowCount(0)
+            for node, modularity_score in node_modularity.items():
+                print(node,modularity_score)
+                row = self.table_modularity.rowCount()
+                self.table_modularity.insertRow(row)
+                self.table_modularity.setItem(row, 0, QTableWidgetItem(str(node)))
+                self.table_modularity.setItem(row, 1, QTableWidgetItem(str(modularity_score)))
+                
+            self.result_label.setText(f' modularity : {mod_no}')
+
         elif algorithm=="NMI":
             print(self.nodes)
+            # first get the true classes of nodes
             ground_truth = self.nodes['class'].values
+            # apply the community detection to know communities 
             detected_communities_generator = nx.algorithms.community.girvan_newman(self.G)
+            # b list kul wahed le wa7du 
             detected_communities = list(next(detected_communities_generator))
+            # bged 3dd el communities eli et3mlt 
             n_communities = len(detected_communities)
+            # number of nodes
             n = self.nodes.shape[0]
-            nmi_scores = []
-            result=""
+
             if n_communities > 0:
                 for i in range(n_communities):
                     if i < n_communities:
+                        # table for know the nodes that found in both true and detected communities
                         contingency_table = pd.crosstab(ground_truth, [node in detected_communities[i] for node in self.G.nodes()])
+                        #summition of true nodes
                         ground_truth_marginal = contingency_table.sum(axis=1)
+                        #summition of false nodes
                         detected_marginal = contingency_table.sum(axis=0)
+
                         pointwise_mi = np.zeros_like(contingency_table, dtype=np.float64)
+
                         for j in range(contingency_table.shape[0]):
                             for k in range(contingency_table.shape[1]):
+
                                 pij = contingency_table.iloc[j, k] / n
+
                                 pi = ground_truth_marginal.iloc[j] / n
+
                                 pj = detected_marginal.iloc[k] / n
+
                                 if (pi != 0 and pj != 0):
                                     pointwise_mi[j, k] = np.log2(pij / (pi*pj))
                                 else:
                                     pointwise_mi[j, k] = np.log2(0)
+
                         mi = np.sum(np.nan_to_num(contingency_table / n * pointwise_mi))
-                        nmi = normalized_mutual_info_score(ground_truth, [node in detected_communities[i] for node in self.G.nodes()])
+                        eps = 1e-10  # small constant to add to entropy terms
+                        nmi = mi / np.sqrt((entropy(ground_truth_marginal / n) + eps) * (entropy(detected_marginal / n) + eps))
 
-                nmi_scores.append(nmi)
-                print(f"Community {i}: NMI = {nmi}")
-                result+=f"NMI = {nmi} \n"
-            self.result_label.setText(result)
-
+                self.result_label.setText(f"NMI = {nmi}")
+                print(f"NMI = {nmi}")
             return 
-
-
-
 
         # Calculate the conductance of the set
     def calculate_pagerank(self):
@@ -339,9 +439,16 @@ class MainWindow(QMainWindow):
                     self.table_pagerank.item(row, col).setBackground(QColor(255, 255, 100))
     
     def calculate_centrality(self):
-        # Get the selected centrality measure from the combo box
+        value = self.textbox.text()
+        if not value:
+            False  
+        else:
+            try:
+                value = round(float(value),1)   # Convert the input to a float
+            except ValueError:
+                # If the input cannot be converted to a float, show an error message
+                print('invalid error')
         centrality_type = str(self.centrality_combo.currentText())
-        #(centrality_type)
         if centrality_type == 'Closeness Centrality':
             centrality = nx.closeness_centrality(self.G)
         elif centrality_type == 'Betweenness Centrality':
@@ -353,8 +460,11 @@ class MainWindow(QMainWindow):
                 centrality[node] /= (n-1)
 
         # Sort the centrality values in descending order
-        centrality = {k: v for k, v in sorted(centrality.items(), key=lambda item: -item[1])}
-
+        if value:
+            centrality = {k: v for k, v in sorted(centrality.items(), key=lambda item: -item[1]) if round(float(v),1)==value}
+        else:
+            centrality = {k: v for k, v in sorted(centrality.items(), key=lambda item: -item[1]) }
+        print(centrality , value)
         # Display the centrality values in the table
         self.table_centrality.setRowCount(len(centrality))
         row = 0
@@ -367,9 +477,41 @@ class MainWindow(QMainWindow):
                 for col in range(2):
                     self.table_centrality.item(row, col).setBackground(QColor(255, 255, 100))
             row += 1
+        
 
-        # Resize the table columns to fit the contents
-        # self.table.resizeColumnsToContents()
+
+    # def calculate_centrality(self):
+    #     # Get the selected centrality measure from the combo box
+    #     centrality_type = str(self.centrality_combo.currentText())
+    #     #(centrality_type)
+    #     if centrality_type == 'Closeness Centrality':
+    #         centrality = nx.closeness_centrality(self.G)
+    #     elif centrality_type == 'Betweenness Centrality':
+    #         centrality = nx.betweenness_centrality(self.G)
+    #     elif centrality_type == 'Harmonic Centrality':
+    #         centrality = nx.harmonic_centrality(self.G)
+    #         n = len(self.G.nodes)
+    #         for node in centrality:
+    #             centrality[node] /= (n-1)
+
+    #     # Sort the centrality values in descending order
+    #     centrality = {k: v for k, v in sorted(centrality.items(), key=lambda item: -item[1])}
+
+    #     # Display the centrality values in the table
+    #     self.table_centrality.setRowCount(len(centrality))
+    #     row = 0
+    #     for node, value in centrality.items():
+    #         #(node,value)
+    #         self.table_centrality.setItem(row, 0, QTableWidgetItem(str(node)))
+    #         self.table_centrality.setItem(row, 1, QTableWidgetItem(str(value)))
+    #         if value == max(centrality.values()):
+    #             # Highlight the row with the largest centrality value
+    #             for col in range(2):
+    #                 self.table_centrality.item(row, col).setBackground(QColor(255, 255, 100))
+    #         row += 1
+
+    #     # Resize the table columns to fit the contents
+    #     # self.table.resizeColumnsToContents()
 
     def apply_girvan_newman(self):
         #(self.G.nodes())
@@ -386,7 +528,6 @@ class MainWindow(QMainWindow):
                 break
 
         # Draw the updated graph
-        
         communities_generator = nx.community.girvan_newman(self.G)
         community_color=['red','orange','yellow','blue','green','gold','black','brown','cyan','gray']
         new_colors={}
